@@ -28,6 +28,32 @@ from utils.preprocessing import (
 from utils.model_utils import discover_weight_files, load_combined_ensemble_model, predict_single
 from utils.ui import inject_global_css, render_topbar, section_header, ACCENT_BLUE
 
+from twilio.rest import Client
+
+@st.cache_data(ttl=3000)
+def get_ice_servers():
+    """Generate TURN credentials dari Twilio."""
+    try:
+        account_sid = st.secrets["TWILIO_ACCOUNT_SID"]
+        api_key = st.secrets["TWILIO_API_KEY"]
+        api_secret = st.secrets["TWILIO_API_SECRET"]
+    except KeyError as e:
+        st.error(f"Kredensial Twilio belum di-set: {e}")
+        return [{"urls": ["stun:stun.l.google.com:19302"]}]
+    
+    client = Client(api_key, api_secret, account_sid)
+    token = client.tokens.create(ttl=3600)
+    
+    ice_servers = []
+    for server in token.ice_servers:
+        entry = {"urls": server["urls"]}
+        if "username" in server:
+            entry["username"] = server["username"]
+            entry["credential"] = server["credential"]
+        ice_servers.append(entry)
+    
+    return ice_servers
+    
 st.set_page_config(
     page_title="Kamus SIBI - Prediksi Isyarat",
     page_icon="🖐️",
@@ -235,9 +261,19 @@ elif page == "Prediksi":
                     self.last_annotated = annotated
                 return av.VideoFrame.from_ndarray(annotated, format="bgr24")
 
+        # ctx = webrtc_streamer(
+        #     key="sibi-webcam",
+        #     mode=WebRtcMode.SENDRECV,
+        #     video_processor_factory=HandBufferProcessor,
+        #     media_stream_constraints={"video": True, "audio": False},
+        #     async_processing=True,
+        #     desired_playing_state=st.session_state.cam_playing,
+        # )
+
         ctx = webrtc_streamer(
             key="sibi-webcam",
             mode=WebRtcMode.SENDRECV,
+            rtc_configuration={"iceServers": get_ice_servers()},  # ← TAMBAHKAN BARIS INI
             video_processor_factory=HandBufferProcessor,
             media_stream_constraints={"video": True, "audio": False},
             async_processing=True,
