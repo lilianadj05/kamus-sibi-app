@@ -27,6 +27,7 @@ import tensorflow as tf
 from .constants import (
     CLASS_NAMES, WEIGHTS_DIR, MODEL_DROPOUT_RATE,
     TARGET_SEQ_LEN, FEATURE_DIM, NUM_CLASSES,
+    OOD_CONFIDENCE_THRESHOLD, OOD_MARGIN_THRESHOLD, OOD_AGREEMENT_THRESHOLD,
 )
 
 
@@ -140,29 +141,81 @@ def load_ensemble_models(weight_paths: tuple):
 def load_combined_ensemble_model(weight_paths: tuple):
     """
     Sama seperti `load_ensemble_models`, tapi seluruh sub-model digabung
-    menjadi SATU graph Keras (Input dibagi bersama, output di-average di
-    dalam graph). Ini membuat prediksi ensemble hanya butuh SATU panggilan
-    `predict()`, bukan N panggilan terpisah — jauh lebih cepat karena
-    overhead dispatch TensorFlow per panggilan hanya terjadi sekali.
-    Dipakai untuk mode webcam real-time.
+    menjadi SATU graph Keras dengan DUA output:
+      1. "average"      — rata-rata softmax antar submodel, (batch, NUM_CLASSES)
+      2. "members"       — softmax tiap submodel TANPA dirata-rata,
+                            (batch, n_model, NUM_CLASSES) — dipakai untuk
+                            menghitung ensemble agreement (lihat
+                            `predict_with_ood_check`).
+    Dengan begini, ensemble + diagnostik out-of-vocabulary tetap hanya
+    butuh SATU panggilan `predict()`, bukan N panggilan terpisah.
     """
     sub_models = load_ensemble_models(weight_paths)
-    if len(sub_models) == 1:
-        return sub_models[0]
-
     shared_input = tf.keras.Input(shape=(TARGET_SEQ_LEN, FEATURE_DIM), name="input")
-    outputs = [m(shared_input) for m in sub_models]
-    averaged = tf.keras.layers.Average(name="ensemble_average")(outputs)
-    return tf.keras.Model(inputs=shared_input, outputs=averaged, name="ensemble_combined")
+    member_outputs = [m(shared_input) for m in sub_models]  # tiap: (batch, NUM_CLASSES)
+
+    if len(member_outputs) == 1:
+        averaged = member_outputs[0]
+    else:
+        averaged = tf.keras.layers.Average(name="ensemble_average")(member_outputs)
+
+    stacked = tf.keras.layers.Lambda(
+        lambda ts: tf.stack(ts, axis=1), name="ensemble_members"
+    )(member_outputs)  # (batch, n_model, NUM_CLASSES)
+
+    return tf.keras.Model(
+        inputs=shared_input, outputs=[averaged, stacked], name="ensemble_combined"
+    )
 
 
 def predict_single(model, model_input: np.ndarray, top_k: int = 5):
-    """Prediksi dengan SATU model (biasa dipakai: hasil dari
-    `load_combined_ensemble_model`, yang secara internal sudah
-    merepresentasikan rata-rata banyak model)."""
+    """Prediksi dengan SATU model (kompatibilitas lama — model dengan
+    satu output softmax, bukan hasil `load_combined_ensemble_model`)."""
     probs = model.predict(model_input, verbose=0)[0]
     order = np.argsort(probs)[::-1][:top_k]
     return [(CLASS_NAMES[i], float(probs[i])) for i in order]
+
+
+def predict_with_ood_check(combined_model, model_input: np.ndarray, top_k: int = 5):
+    """
+    Menjalankan prediksi ensemble + diagnostik out-of-vocabulary (OOV).
+    `combined_model` HARUS berasal dari `load_combined_ensemble_model`
+    (dua output: averaged & members).
+
+    Returns:
+        results: daftar top_k (label, probabilitas) dari rata-rata ensemble
+        diagnostics: dict berisi confidence, margin, agreement, dan
+                     is_confident (bool — False berarti sebaiknya
+                     ditampilkan sebagai "Isyarat Tidak Dikenali")
+    """
+    averaged, members = combined_model.predict(model_input, verbose=0)
+    averaged = averaged[0]        # (NUM_CLASSES,)
+    members = members[0]          # (n_model, NUM_CLASSES)
+
+    order = np.argsort(averaged)[::-1]
+    top1_idx = int(order[0])
+    top1_prob = float(averaged[top1_idx])
+    top2_prob = float(averaged[order[1]]) if len(order) > 1 else 0.0
+    margin = top1_prob - top2_prob
+
+    member_top1 = np.argmax(members, axis=-1)  # (n_model,)
+    agreement = float(np.mean(member_top1 == top1_idx)) if len(member_top1) else 0.0
+
+    is_confident = (
+        top1_prob >= OOD_CONFIDENCE_THRESHOLD
+        and margin >= OOD_MARGIN_THRESHOLD
+        and agreement >= OOD_AGREEMENT_THRESHOLD
+    )
+
+    results = [(CLASS_NAMES[i], float(averaged[i])) for i in order[:top_k]]
+    diagnostics = {
+        "confidence": top1_prob,
+        "margin": margin,
+        "agreement": agreement,
+        "n_models": int(members.shape[0]),
+        "is_confident": is_confident,
+    }
+    return results, diagnostics
 
 
 def predict(models, model_input: np.ndarray, top_k: int = 5):
