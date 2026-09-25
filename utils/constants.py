@@ -65,6 +65,29 @@ MODEL_DROPOUT_RATE = 0.3
 WEBCAM_BUFFER_SECONDS = 6
 WEBCAM_APPROX_FPS = 15
 
+# Rasio minimum frame dengan tangan terdeteksi di buffer agar prediksi
+# dijalankan. Di bawah ini, hasil langsung "Tidak Terdeteksi" tanpa
+# menjalankan model (mencegah hasil "default" dari input kosong/nol).
+MIN_HAND_DETECTION_RATIO = 0.05
+
+# ── Ambang penolakan untuk input di luar 17 kosakata (out-of-vocabulary) ──
+# Model bersifat closed-set: softmax SELALU memaksa memilih salah satu
+# dari 17 kelas, walau gerakannya di luar kosakata itu. Kombinasi 3 sinyal
+# di bawah dipakai supaya penolakan lebih tepercaya dibanding threshold
+# confidence tunggal:
+#   1. confidence  — probabilitas softmax top-1 (rata-rata ensemble)
+#   2. margin      — selisih probabilitas top-1 vs top-2 (makin tipis,
+#                     makin ragu modelnya)
+#   3. agreement   — proporsi submodel (fold) yang argmax-nya SAMA dengan
+#                     kelas top-1 hasil rata-rata (makin rendah, makin
+#                     besar kemungkinan fold-fold saling tidak sepakat —
+#                     tanda kuat input di luar distribusi training)
+# Ketiganya harus lolos ambang agar prediksi dianggap "yakin"; kalau salah
+# satu gagal, hasil ditampilkan sebagai "Isyarat Tidak Dikenali".
+OOD_CONFIDENCE_THRESHOLD = 0.35
+OOD_MARGIN_THRESHOLD = 0.12
+OOD_AGREEMENT_THRESHOLD = 0.6
+
 # Seed default yang dipakai (5-fold, seed ini saja) — pemilihan ini
 # dari hasil diskusi: 1 seed penuh 5-fold jauh lebih cepat daripada
 # 3 seed x 5 fold (15 file), dengan penurunan akurasi yang minim karena
