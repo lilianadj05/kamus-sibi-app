@@ -19,15 +19,16 @@ from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
 from utils.constants import (
     CLASS_NAMES, MODEL_INFO, WEIGHTS_DIR, KATA_SENSITIF,
-    WEBCAM_BUFFER_SECONDS, WEBCAM_APPROX_FPS,
+    WEBCAM_BUFFER_SECONDS, WEBCAM_APPROX_FPS, MIN_HAND_DETECTION_RATIO,
 )
 from utils.preprocessing import (
     preprocess_frames, raw_seq_to_model_input,
     make_live_hands_model, extract_and_annotate,
 )
-from utils.model_utils import discover_weight_files, load_combined_ensemble_model, predict_single
+from utils.model_utils import discover_weight_files, load_combined_ensemble_model, predict_with_ood_check
 from utils.ui import inject_global_css, render_topbar, section_header, ACCENT_BLUE
 
+# UNTUK CLOUD TAMBAH INIIIIIIIII!!!!!!
 from twilio.rest import Client
 
 @st.cache_data(ttl=3000)
@@ -53,7 +54,7 @@ def get_ice_servers():
         ice_servers.append(entry)
     
     return ice_servers
-    
+
 st.set_page_config(
     page_title="Kamus SIBI - Prediksi Isyarat",
     page_icon="🖐️",
@@ -61,6 +62,49 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 inject_global_css()
+
+
+# ════════════════════════════════════════════════════════════════
+# HELPER RENDER HASIL PREDIKSI (dipakai Upload Video & Webcam)
+# ════════════════════════════════════════════════════════════════
+
+def render_badge_card(badge_label, confidence=None, extra_caption=""):
+    conf_html = (
+        f'<p style="margin-top:10px;">Keyakinan: <b>{confidence*100:.1f}%</b></p>'
+        if confidence is not None else ""
+    )
+    st.markdown(f"""
+        <div class="sibi-card" style="text-align:center;">
+        <p class="sibi-caption">Hasil Prediksi</p>
+        <span class="sibi-result-badge">{badge_label}</span>
+        {conf_html}
+        <p class="sibi-caption">{extra_caption}</p>
+        </div>
+    """, unsafe_allow_html=True)
+
+
+def render_diagnostics_caption(diagnostics):
+    n_agree = int(round(diagnostics["agreement"] * diagnostics["n_models"]))
+    st.caption(
+        f"Diagnostik ensemble — confidence: {diagnostics['confidence']*100:.1f}% · "
+        f"margin top-1/top-2: {diagnostics['margin']*100:.1f}% · "
+        f"kesepakatan fold: {n_agree}/{diagnostics['n_models']}"
+    )
+
+
+def render_topk_list(results):
+    section_header("Top-5 Kemungkinan Kosakata")
+    for label, prob in results:
+        st.write(f"**{label}**")
+        st.progress(min(prob, 1.0), text=f"{prob*100:.1f}%")
+
+
+def maybe_show_sensitive_note(label):
+    if label in KATA_SENSITIF:
+        st.info(
+            "ℹ️ Kosakata ini termasuk istilah kesehatan reproduksi yang "
+            "digunakan untuk konteks edukasi kesehatan bagi komunitas Tuli."
+        )
 
 # ════════════════════════════════════════════════════════════════
 # SIDEBAR NAVIGASI
@@ -121,8 +165,8 @@ elif page == "Petunjuk":
         <li>Buka menu <b>Prediksi</b> di sidebar.</li>
         <li>Pilih tab <b>Upload Video</b> atau <b>Webcam</b>.</li>
         <li>Untuk upload video: pilih file berformat MP4/MOV/AVI berisi satu gerakan isyarat.</li>
-        <li>Untuk webcam: klik <b>Mulai Rekam</b>, izinkan akses kamera, lakukan gerakan
-            isyarat di depan kamera, lalu klik tombol <b>Prediksi & Hentikan Kamera</b>.</li>
+        <li>Untuk webcam: klik <b>START</b> di bawah video, izinkan akses kamera, lakukan
+            gerakan isyarat, lalu klik <b>STOP</b> — prediksi otomatis muncul.</li>
         <li>Sistem akan menampilkan kosakata hasil prediksi beserta tingkat keyakinan (confidence).</li>
         </ol>
         </div>
@@ -196,58 +240,62 @@ elif page == "Prediksi":
                     if model_input is None:
                         st.warning("Tidak ada frame yang berhasil dibaca dari video ini.")
                     else:
-                        results = predict_single(combined_model, model_input, top_k=5)
-                        top_label, top_prob = results[0]
+                        extra_caption = (
+                            f"Rasio deteksi tangan: {info['detection_ratio']*100:.0f}% "
+                            f"| Frame asli: {info['n_frame_asli']}"
+                        )
 
-                        with col_b:
-                            st.markdown(f"""
-                                <div class="sibi-card" style="text-align:center;">
-                                <p class="sibi-caption">Hasil Prediksi</p>
-                                <span class="sibi-result-badge">{top_label}</span>
-                                <p style="margin-top:10px;">Keyakinan: <b>{top_prob*100:.1f}%</b></p>
-                                <p class="sibi-caption">Rasio deteksi tangan: {info['detection_ratio']*100:.0f}%
-                                &nbsp;|&nbsp; Frame asli: {info['n_frame_asli']}</p>
-                                </div>
-                            """, unsafe_allow_html=True)
-
-                        if info["detection_ratio"] < 0.3:
+                        if info["detection_ratio"] < MIN_HAND_DETECTION_RATIO:
+                            with col_b:
+                                render_badge_card("Tidak Terdeteksi", extra_caption=extra_caption)
                             st.warning(
-                                "Rasio deteksi tangan rendah — hasil prediksi mungkin kurang "
-                                "akurat. Coba video dengan tangan lebih terlihat jelas."
+                                "Tangan tidak terdeteksi di video ini. Coba unggah video "
+                                "dengan tangan lebih terlihat jelas dan pencahayaan lebih baik."
                             )
+                        else:
+                            results, diag = predict_with_ood_check(combined_model, model_input, top_k=5)
+                            is_ok = diag["is_confident"]
+                            badge_label = results[0][0] if is_ok else "Isyarat Tidak Dikenali"
 
-                        section_header("Top-5 Kemungkinan Kosakata")
-                        for label, prob in results:
-                            st.write(f"**{label}**")
-                            st.progress(min(prob, 1.0), text=f"{prob*100:.1f}%")
+                            with col_b:
+                                render_badge_card(badge_label, confidence=diag["confidence"], extra_caption=extra_caption)
+                            render_diagnostics_caption(diag)
 
-                        if top_label in KATA_SENSITIF:
-                            st.info(
-                                "ℹ️ Kosakata ini termasuk istilah kesehatan reproduksi yang "
-                                "digunakan untuk konteks edukasi kesehatan bagi komunitas Tuli."
-                            )
+                            if not is_ok:
+                                st.warning(
+                                    "Gerakan ini tidak cukup meyakinkan cocok dengan salah satu "
+                                    "dari 17 kosakata yang dikenali. Berikut kemungkinan terdekat "
+                                    "(belum tentu benar):"
+                                )
+
+                            render_topk_list(results)
+
+                            if is_ok:
+                                maybe_show_sensitive_note(results[0][0])
 
     # ── MODE: WEBCAM ─────────────────────────────────────────────
     elif input_mode == "📷 Webcam":
         section_header("Prediksi via Webcam")
         st.markdown(
-            '<p class="sibi-caption">Klik <b>Mulai Rekam</b>, izinkan akses kamera, lalu lakukan '
-            'gerakan isyarat (kotak hijau & tulisan di video menandakan tangan sudah terdeteksi). '
-            'Klik <b>Prediksi & Hentikan Kamera</b> saat selesai — kamera berhenti otomatis dan '
-            'hasil langsung muncul.</p>',
+            '<p class="sibi-caption">Klik <b>START</b> di bawah video, izinkan akses kamera, lalu '
+            'lakukan gerakan isyarat (kotak hijau & tulisan di video menandakan tangan sudah '
+            'terdeteksi). Klik <b>STOP</b> saat selesai — prediksi otomatis muncul begitu kamera '
+            'berhenti.</p>',
             unsafe_allow_html=True,
         )
 
         buffer_len = WEBCAM_BUFFER_SECONDS * WEBCAM_APPROX_FPS  # fixed, tidak ada opsi
 
-        st.session_state.setdefault("cam_playing", False)
+        st.session_state.setdefault("cam_was_playing", False)
+        st.session_state.setdefault("cam_processor_ref", None)
         st.session_state.setdefault("webcam_result", None)
 
-        # ── Video processor: ekstrak landmark & gambar status deteksi ────
+        # ── Video processor: ekstrak landmark, status deteksi per frame ────
         class HandBufferProcessor:
             def __init__(self):
                 self.lock = threading.Lock()
                 self.feature_buffer = collections.deque(maxlen=buffer_len)
+                self.detected_buffer = collections.deque(maxlen=buffer_len)
                 self.last_annotated = None
                 self._hands_model = make_live_hands_model()
 
@@ -258,18 +306,11 @@ elif page == "Prediksi":
                 )
                 with self.lock:
                     self.feature_buffer.append(feat)
+                    self.detected_buffer.append(detected)
                     self.last_annotated = annotated
                 return av.VideoFrame.from_ndarray(annotated, format="bgr24")
 
-        # ctx = webrtc_streamer(
-        #     key="sibi-webcam",
-        #     mode=WebRtcMode.SENDRECV,
-        #     video_processor_factory=HandBufferProcessor,
-        #     media_stream_constraints={"video": True, "audio": False},
-        #     async_processing=True,
-        #     desired_playing_state=st.session_state.cam_playing,
-        # )
-
+        # UNTUK CLOUD TAMBAH INIIIIIIIII!!!!!!
         ctx = webrtc_streamer(
             key="sibi-webcam",
             mode=WebRtcMode.SENDRECV,
@@ -277,82 +318,103 @@ elif page == "Prediksi":
             video_processor_factory=HandBufferProcessor,
             media_stream_constraints={"video": True, "audio": False},
             async_processing=True,
-            desired_playing_state=st.session_state.cam_playing,
         )
 
-        # ── Satu tombol untuk mulai rekam & rekam ulang ──────────────
-        if not st.session_state.cam_playing:
-            start_label = "🔁 Rekam Ulang" if st.session_state.webcam_result else "▶️ Mulai Rekam"
-            if st.button(start_label, type="primary"):
-                st.session_state.webcam_result = None
-                st.session_state.cam_playing = True
-                st.rerun()
+        was_playing = st.session_state.cam_was_playing
+        now_playing = ctx.state.playing
 
-        # ── Tombol prediksi, hanya muncul saat kamera aktif ──────────
-        if st.session_state.cam_playing:
-            predict_clicked = st.button("🔍 Prediksi & Hentikan Kamera", type="primary")
+        # Sesi baru dimulai (user klik START) -> bersihkan hasil lama
+        if now_playing and not was_playing:
+            st.session_state.webcam_result = None
 
-            if predict_clicked:
-                if not ctx.video_processor:
-                    st.warning("Kamera belum siap. Tunggu sebentar lalu coba lagi.")
+        # Simpan referensi processor SELAGI kamera masih aktif. WAJIB:
+        # begitu STOP diklik, library ini langsung melepas ctx.video_processor
+        # (di dalam pemanggilan webrtc_streamer() itu sendiri) sebelum kode
+        # kita sempat membaca buffer-nya — jadi harus disimpan lebih dulu.
+        if now_playing and ctx.video_processor is not None:
+            st.session_state.cam_processor_ref = ctx.video_processor
+
+        # User baru saja klik STOP -> jalankan prediksi otomatis
+        if was_playing and not now_playing:
+            proc = st.session_state.cam_processor_ref
+            if proc is None:
+                st.session_state.webcam_result = {"status": "not_detected", "n_frames": 0, "detection_ratio": 0.0, "annotated": None}
+            else:
+                with proc.lock:
+                    raw_seq = np.array(list(proc.feature_buffer), dtype=np.float32)
+                    detected_list = list(proc.detected_buffer)
+                    last_annotated = proc.last_annotated
+
+                n_frames = len(detected_list)
+                detection_ratio = (sum(detected_list) / n_frames) if n_frames else 0.0
+
+                if n_frames == 0 or detection_ratio < MIN_HAND_DETECTION_RATIO:
+                    st.session_state.webcam_result = {
+                        "status": "not_detected",
+                        "n_frames": n_frames,
+                        "detection_ratio": detection_ratio,
+                        "annotated": last_annotated,
+                    }
                 else:
-                    with ctx.video_processor.lock:
-                        raw_seq = np.array(
-                            list(ctx.video_processor.feature_buffer), dtype=np.float32
-                        )
-                        n_frames = len(ctx.video_processor.feature_buffer)
-                        last_annotated = ctx.video_processor.last_annotated
+                    with st.spinner("Menjalankan prediksi..."):
+                        model_input = raw_seq_to_model_input(raw_seq)
+                        results, diag = predict_with_ood_check(combined_model, model_input, top_k=5)
+                    st.session_state.webcam_result = {
+                        "status": "ok" if diag["is_confident"] else "unknown",
+                        "results": results,
+                        "diag": diag,
+                        "n_frames": n_frames,
+                        "detection_ratio": detection_ratio,
+                        "annotated": last_annotated,
+                    }
+            st.session_state.cam_processor_ref = None
 
-                    if n_frames < 5:
-                        st.warning("Buffer belum cukup terisi. Tunggu beberapa detik lalu coba lagi.")
-                    else:
-                        with st.spinner("Menjalankan prediksi..."):
-                            model_input = raw_seq_to_model_input(raw_seq)
+        st.session_state.cam_was_playing = now_playing
 
-                        if model_input is None:
-                            st.warning("Belum ada tangan terdeteksi di buffer. Coba lagi.")
-                        else:
-                            results = predict_single(combined_model, model_input, top_k=5)
-                            st.session_state.webcam_result = {
-                                "results": results,
-                                "n_frames": n_frames,
-                                "annotated": last_annotated,
-                            }
-                            st.session_state.cam_playing = False  # auto-stop kamera
-                            st.rerun()
-
-        # ── Tampilkan hasil prediksi terakhir (kamera sudah berhenti) ──────
-        if st.session_state.webcam_result is not None:
-            res = st.session_state.webcam_result
-            top_label, top_prob = res["results"][0]
+        # ── Tampilkan hasil prediksi terakhir ──────────────────────
+        res = st.session_state.webcam_result
+        if res is not None:
+            status = res["status"]
+            extra_caption = (
+                f"Rasio deteksi tangan: {res['detection_ratio']*100:.0f}% "
+                f"| Frame di buffer: {res['n_frames']}"
+            )
 
             col_res1, col_res2 = st.columns([1, 1])
             with col_res1:
-                if res["annotated"] is not None:
+                if res.get("annotated") is not None:
                     st.image(
                         cv2.cvtColor(res["annotated"], cv2.COLOR_BGR2RGB),
                         caption="Frame terakhir + landmark tangan",
                     )
-            with col_res2:
-                st.markdown(f"""
-                    <div class="sibi-card" style="text-align:center;">
-                    <p class="sibi-caption">Hasil Prediksi</p>
-                    <span class="sibi-result-badge">{top_label}</span>
-                    <p style="margin-top:10px;">Keyakinan: <b>{top_prob*100:.1f}%</b></p>
-                    <p class="sibi-caption">Frame di buffer: {res['n_frames']}</p>
-                    </div>
-                """, unsafe_allow_html=True)
 
-            section_header("Top-5 Kemungkinan Kosakata")
-            for label, prob in res["results"]:
-                st.write(f"**{label}**")
-                st.progress(min(prob, 1.0), text=f"{prob*100:.1f}%")
-
-            if top_label in KATA_SENSITIF:
-                st.info(
-                    "ℹ️ Kosakata ini termasuk istilah kesehatan reproduksi yang "
-                    "digunakan untuk konteks edukasi kesehatan bagi komunitas Tuli."
+            if status == "not_detected":
+                with col_res2:
+                    render_badge_card("Tidak Terdeteksi", extra_caption=extra_caption)
+                st.warning(
+                    "Tangan tidak terdeteksi selama 6 detik rekaman. Klik START lagi dan "
+                    "pastikan tangan sepenuhnya terlihat di kamera."
                 )
+            else:
+                diag = res["diag"]
+                results = res["results"]
+                is_ok = status == "ok"
+                badge_label = results[0][0] if is_ok else "Isyarat Tidak Dikenali"
+
+                with col_res2:
+                    render_badge_card(badge_label, confidence=diag["confidence"], extra_caption=extra_caption)
+                render_diagnostics_caption(diag)
+
+                if not is_ok:
+                    st.warning(
+                        "Gerakan ini tidak cukup meyakinkan cocok dengan salah satu dari 17 "
+                        "kosakata yang dikenali. Berikut kemungkinan terdekat (belum tentu benar):"
+                    )
+
+                render_topk_list(results)
+
+                if is_ok:
+                    maybe_show_sensitive_note(results[0][0])
 
         st.caption(
             "Catatan: koneksi webcam menggunakan WebRTC dan server STUN publik. "
