@@ -1,20 +1,20 @@
 """
-Utilitas untuk memuat model Transformer (Model 2 - Tanpa Augmentasi) dan
+Utilitas untuk memuat model Transformer (Model 4 - Dengan Augmentasi) dan
 menjalankan prediksi.
 
 PENTING: bobot hasil training disimpan per fold-iterasi & per seed sebagai
 file *.weights.h5 (bukan satu file model utuh), contoh:
-    Model_2_iter4_seed123.weights.h5
+    Model_4_iter4_seed123.weights.h5
 
 File .weights.h5 HANYA berisi nilai bobot, bukan arsitektur. Karena itu,
 arsitektur Transformer harus dibangun ulang dengan kode yang identik
 dengan saat training, baru bobotnya dimuat dengan `load_weights()`.
 
 Karena ada banyak kombinasi fold/seed, aplikasi ini memuat SEMUA file
-*.weights.h5 yang ada di `WEIGHTS_DIR` lalu meng-ensemble prediksinya
-(rata-rata softmax antar model) — hasil ini lebih stabil dibanding
-memakai satu fold/seed saja, dan mendekati angka akurasi rata-rata
-5-fold yang dilaporkan di notebook.
+bobot bertag "Model_4_" yang ada di `WEIGHTS_DIR` lalu meng-ensemble
+prediksinya (rata-rata softmax antar model) — hasil ini lebih stabil
+dibanding memakai satu fold/seed saja, dan mendekati angka akurasi
+rata-rata 5-fold yang dilaporkan di notebook.
 """
 
 import glob
@@ -25,7 +25,7 @@ import streamlit as st
 import tensorflow as tf
 
 from .constants import (
-    CLASS_NAMES, WEIGHTS_DIR, MODEL_DROPOUT_RATE,
+    CLASS_NAMES, WEIGHTS_DIR, WEIGHT_FILE_PATTERN, MODEL_DROPOUT_RATE,
     TARGET_SEQ_LEN, FEATURE_DIM, NUM_CLASSES,
     OOD_CONFIDENCE_THRESHOLD, OOD_MARGIN_THRESHOLD, OOD_AGREEMENT_THRESHOLD,
 )
@@ -71,13 +71,21 @@ def build_transformer_model(seq_len=TARGET_SEQ_LEN,
                              dropout_rate=MODEL_DROPOUT_RATE,
                              seed=42,
                              name="transformer_2block"):
+    """
+    Arsitektur Transformer 2-block untuk Model 4 (Dengan Augmentasi).
+
+    PENTING — beda dengan Model 2 (versi lama): TIDAK ADA scaling input
+    dengan √feature_dim sebelum positional encoding. Scaling itu adalah
+    bug di pipeline lama (input yang sudah dinormalisasi ke [-1, 1]
+    dikalikan √164 ≈ 12.8, membuat magnitude input jauh lebih besar
+    daripada positional encoding sehingga sinyal urutan waktu nyaris
+    tenggelam). Sudah diperbaiki di notebook Model 4 — positional
+    encoding langsung dijumlahkan ke input tanpa scaling.
+    """
     init = tf.keras.initializers.GlorotUniform(seed=seed)
     inputs = tf.keras.Input(shape=(seq_len, feature_dim), name=f"{name}_input")
 
-    x = tf.keras.layers.Lambda(
-        lambda t: t * tf.math.sqrt(tf.cast(feature_dim, tf.float32))
-    )(inputs)
-    x = LearnedPositionalEncoding(max_len=seq_len, d_model=feature_dim)(x)
+    x = LearnedPositionalEncoding(max_len=seq_len, d_model=feature_dim)(inputs)
 
     for _ in range(2):  # 2 attention block, sesuai notebook
         attn = tf.keras.layers.MultiHeadAttention(
@@ -110,11 +118,12 @@ def build_transformer_model(seq_len=TARGET_SEQ_LEN,
 # DISCOVERY & LOADING BOBOT (di-cache — hanya dibangun sekali per sesi)
 # ════════════════════════════════════════════════════════════════
 
-def discover_weight_files(weights_dir: str = WEIGHTS_DIR):
-    """Mencari semua file *.weights.h5 di dalam folder, terurut nama."""
+def discover_weight_files(weights_dir: str = WEIGHTS_DIR, pattern: str = WEIGHT_FILE_PATTERN):
+    """Mencari semua file bobot yang cocok `pattern` (default: Model_4_*)
+    di dalam folder, terurut nama."""
     if not os.path.isdir(weights_dir):
         return []
-    return sorted(glob.glob(os.path.join(weights_dir, "*.weights.h5")))
+    return sorted(glob.glob(os.path.join(weights_dir, pattern)))
 
 
 @st.cache_resource(show_spinner="Memuat model Transformer (ensemble)...")
