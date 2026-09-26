@@ -1,7 +1,11 @@
 """
 Konstanta global untuk aplikasi Prediksi Isyarat SIBI.
-Nilai-nilai ini HARUS sama persis dengan yang dipakai saat training
-(lihat notebook: HANDS3D_Geometry164_seq45_NoAugTransforme_3seed).
+Nilai-nilai ini HARUS sama persis dengan yang dipakai saat training.
+
+Model yang dipakai saat ini: MODEL 4 — Transformer DENGAN Augmentasi
+(lihat notebook: Copy_of_R2_HANDS3D_Geometry164_seq45_AugTransformer_3seed).
+Augmentasi hanya berlaku saat training (memperbanyak data), TIDAK
+memengaruhi pipeline preprocessing saat inferensi di app ini.
 """
 
 # ── Parameter fitur & sekuens (harus sama dengan training) ─────────
@@ -34,32 +38,41 @@ CLASS_NAMES = [
 # (tetap disertakan dalam prediksi karena aplikasi ini untuk edukasi kesehatan)
 KATA_SENSITIF = ["Buah Zakar", "Penis", "Ereksi"]
 
-# ── Info ringkas model (hasil evaluasi akhir dari notebook) ─────────
+# ── Info ringkas model (hasil evaluasi akhir dari notebook, 15 run:
+# 5-fold x 3 seed, kelas 17, dihitung dari output training Model 4) ──
 MODEL_INFO = {
-    "nama": "Transformer (Tanpa Augmentasi) + Fitur Geometri 164-D",
+    "nama": "Transformer (Dengan Augmentasi) + Fitur Geometri 164-D",
     "arsitektur": "Transformer Encoder 2-Block",
-    "avg_accuracy": 0.8320,
-    "avg_f1": 0.8300,
-    "std_accuracy": 0.0244,
+    "augmentasi": True,
+    "avg_accuracy": 0.8559,
+    "avg_f1": 0.8543,
+    "std_accuracy": 0.0183,
     "seq_len": TARGET_SEQ_LEN,
     "feature_dim": FEATURE_DIM,
     "jumlah_kelas": NUM_CLASSES,
 }
 
-# ── Konfigurasi bobot model (Model 2 disimpan sebagai .weights.h5 ────
-# per fold-iterasi & per seed, bukan sebagai satu file model utuh) ──
-# Semua file *.weights.h5 di folder ini akan dimuat & di-ensemble
-# (rata-rata softmax) saat prediksi.
+# ── Konfigurasi bobot model (disimpan sebagai .weights.h5 per ──────
+# fold-iterasi & per seed, bukan sebagai satu file model utuh). Hanya
+# file dengan prefix "Model_4_" yang dimuat & di-ensemble (rata-rata
+# softmax) saat prediksi — supaya file bobot Model 2 lama yang
+# mungkin masih nyangkut di folder ini tidak ikut terpakai.
 WEIGHTS_DIR = "models/weights"
+WEIGHT_FILE_PATTERN = "Model_4_*.weights.h5"
 
-# Filter default: kalau ada file dengan tag ini di namanya, itu yang
-# otomatis terpilih duluan di UI (bisa diganti manual lewat multiselect).
+# Seed default yang dipakai (5-fold, seed ini saja) kalau kamu ingin
+# menyaring manual — 1 seed penuh 5-fold jauh lebih cepat daripada
+# 3 seed x 5 fold (15 file), dengan penurunan akurasi yang minim karena
+# variasi antar-seed jauh lebih kecil dibanding variasi antar-fold.
 DEFAULT_SEED_TAG = "seed42"
 
-# Hyperparameter arsitektur Model 2 (harus sama persis dengan saat
+# Hyperparameter arsitektur Model 4 (HARUS sama persis dengan saat
 # training agar bobot bisa dimuat) — lihat MODEL_VARIANTS di notebook:
-# {"id":"Model_2", "arsitektur":"transformer", "augmentasi":False, "dropout":0.3}
-MODEL_DROPOUT_RATE = 0.3
+# {"id":"Model_4", "arsitektur":"transformer", "augmentasi":True, "dropout":0.4}
+# PENTING: Model 4 dilatih dengan arsitektur yang sudah diperbaiki —
+# TANPA scaling input oleh √feature_dim sebelum positional encoding
+# (scaling itu adalah bug di Model 2/versi lama, sudah dihapus di sini).
+MODEL_DROPOUT_RATE = 0.4
 
 # ── Konfigurasi buffer webcam (fixed, tidak bisa diubah dari UI) ────
 WEBCAM_BUFFER_SECONDS = 6
@@ -87,15 +100,3 @@ MIN_HAND_DETECTION_RATIO = 0.05
 OOD_CONFIDENCE_THRESHOLD = 0.35
 OOD_MARGIN_THRESHOLD = 0.12
 OOD_AGREEMENT_THRESHOLD = 0.6
-
-# Seed default yang dipakai (5-fold, seed ini saja) — pemilihan ini
-# dari hasil diskusi: 1 seed penuh 5-fold jauh lebih cepat daripada
-# 3 seed x 5 fold (15 file), dengan penurunan akurasi yang minim karena
-# variasi antar-seed jauh lebih kecil dibanding variasi antar-fold.
-DEFAULT_SEED_TAG = "seed42"
-
-# ── Konfigurasi buffer webcam ───────────────────────────────────────
-# Buffer selalu berisi N detik TERAKHIR dari feed kamera, dihitung
-# berdasarkan timestamp asli (bukan asumsi FPS tetap) supaya tetap
-# akurat walau frame rate browser pengguna berbeda-beda.
-WEBCAM_BUFFER_SECONDS = 6
