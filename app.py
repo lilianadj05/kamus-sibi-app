@@ -1,8 +1,9 @@
 """
-Kamus SIBI — Prediksi Isyarat (Model Transformer, Tanpa Augmentasi)
+Kamus SIBI — Prediksi Isyarat (Model Transformer, Dengan Augmentasi)
 Aplikasi Streamlit untuk mengenali kosakata Bahasa Isyarat Indonesia (SIBI)
 dari video unggahan maupun webcam, menggunakan model Transformer 2-Block
-yang dilatih pada fitur geometri tangan 164-dimensi (MediaPipe Hands).
+(Model 4) yang dilatih dengan augmentasi geometry-consistent pada fitur
+geometri tangan 164-dimensi (MediaPipe Hands).
 """
 
 import collections
@@ -191,9 +192,9 @@ elif page == "Prediksi":
     all_weight_files = discover_weight_files(WEIGHTS_DIR)
     if not all_weight_files:
         st.error(
-            f"⚠️ Tidak ada file bobot (*.weights.h5) di folder `{WEIGHTS_DIR}`. "
-            "Letakkan file seperti `Model_2_iter4_seed123.weights.h5` hasil "
-            "training Model 2 (Transformer, Tanpa Augmentasi) di folder tersebut."
+            f"⚠️ Tidak ada file bobot (Model_4_*.weights.h5) di folder `{WEIGHTS_DIR}`. "
+            "Letakkan file seperti `Model_4_iter4_seed123.weights.h5` hasil "
+            "training Model 4 (Transformer, Dengan Augmentasi) di folder tersebut."
         )
         st.stop()
 
@@ -433,13 +434,20 @@ elif page == "Tentang Model":
         <div class="sibi-card">
         <ul>
         <li><b>Arsitektur</b>: {MODEL_INFO['arsitektur']} — 2 attention block,
-            2 heads, key_dim=82, dilengkapi Learned Positional Encoding.</li>
+            2 heads, key_dim=82, dilengkapi Learned Positional Encoding
+            (tanpa scaling input √feature_dim — bug pada versi sebelumnya
+            yang membuat sinyal urutan waktu nyaris tenggelam, sudah diperbaiki).</li>
         <li><b>Input</b>: sekuens {MODEL_INFO['seq_len']} frame × {MODEL_INFO['feature_dim']}
             fitur (126 koordinat XYZ MediaPipe + 38 fitur geometri tangan).</li>
         <li><b>Loss function</b>: Focal Loss + Label Smoothing (γ=3.0, α=0.25, smoothing=0.1).</li>
         <li><b>Optimizer</b>: Adam dengan Cosine Annealing Warm Restarts (T₀=10).</li>
-        <li><b>Augmentasi data</b>: tidak digunakan — dinonaktifkan karena secara
-            empiris menurunkan performa varian Transformer.</li>
+        <li><b>Dropout</b>: 0.4 (lebih tinggi dari varian tanpa augmentasi, untuk
+            mengimbangi kapasitas ekstra dari data yang diperbanyak augmentasi).</li>
+        <li><b>Augmentasi data</b>: <i>geometry-consistent augmentation</i> — scaling,
+            shift, noise, dan frame-dropout diterapkan pada 126 dim koordinat XYZ
+            mentah, lalu ke-38 fitur geometri tangan DIHITUNG ULANG dari koordinat
+            yang sudah diaugmentasi (bukan sekadar disalin), supaya fitur geometri
+            tetap konsisten secara geometris dengan bentuk tangan hasil augmentasi.</li>
         <li><b>Validasi</b>: 5-fold cross-validation subject-independent,
             3 seed acak per fold (15 run total).</li>
         </ul>
