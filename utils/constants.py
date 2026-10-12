@@ -38,14 +38,15 @@ CLASS_NAMES = [
 # (tetap disertakan dalam prediksi karena aplikasi ini untuk edukasi kesehatan)
 KATA_SENSITIF = ["Buah Zakar", "Penis", "Ereksi"]
 
-# ── Info ringkas model (hasil evaluasi Model 4 setelah retrain) ─────
+# ── Info ringkas model (hasil evaluasi akhir dari notebook, 15 run:
+# 5-fold x 3 seed, kelas 17, dihitung dari output training Model 4) ──
 MODEL_INFO = {
     "nama": "Transformer (Dengan Augmentasi) + Fitur Geometri 164-D",
     "arsitektur": "Transformer Encoder 2-Block",
     "augmentasi": True,
-    "avg_accuracy": 0.8493,
-    "avg_f1": 0.8462,
-    "loss_gap": 0.0617,
+    "avg_accuracy": 0.8559,
+    "avg_f1": 0.8543,
+    "std_accuracy": 0.0183,
     "seq_len": TARGET_SEQ_LEN,
     "feature_dim": FEATURE_DIM,
     "jumlah_kelas": NUM_CLASSES,
@@ -53,12 +54,17 @@ MODEL_INFO = {
 
 # ── Konfigurasi bobot model (disimpan sebagai .weights.h5 per ──────
 # fold-iterasi & per seed, bukan sebagai satu file model utuh). Hanya
-# file Model 4 dengan seed ACTIVE_SEED yang dimuat & di-ensemble
-# (rata-rata softmax antar fold) — file seed lain atau Model 2 lama yang
-# kebetulan ada di folder ini tidak ikut terpakai.
+# file dengan prefix "Model_4_" yang dimuat & di-ensemble (rata-rata
+# softmax) saat prediksi — supaya file bobot Model 2 lama yang
+# mungkin masih nyangkut di folder ini tidak ikut terpakai.
 WEIGHTS_DIR = "models/weights"
-ACTIVE_SEED = 777
-WEIGHT_FILE_PATTERN = f"Model_4_*_seed{ACTIVE_SEED}.weights.h5"
+WEIGHT_FILE_PATTERN = "Model_4_*.weights.h5"
+
+# Seed default yang dipakai (5-fold, seed ini saja) kalau kamu ingin
+# menyaring manual — 1 seed penuh 5-fold jauh lebih cepat daripada
+# 3 seed x 5 fold (15 file), dengan penurunan akurasi yang minim karena
+# variasi antar-seed jauh lebih kecil dibanding variasi antar-fold.
+DEFAULT_SEED_TAG = "seed42"
 
 # Hyperparameter arsitektur Model 4 (HARUS sama persis dengan saat
 # training agar bobot bisa dimuat) — lihat MODEL_VARIANTS di notebook:
@@ -91,6 +97,6 @@ MIN_HAND_DETECTION_RATIO = 0.05
 #                     tanda kuat input di luar distribusi training)
 # Ketiganya harus lolos ambang agar prediksi dianggap "yakin"; kalau salah
 # satu gagal, hasil ditampilkan sebagai "Isyarat Tidak Dikenali".
-OOD_CONFIDENCE_THRESHOLD = 0.30   # sebelumnya 0.35
-OOD_MARGIN_THRESHOLD = 0.08       # sebelumnya 0.12
-OOD_AGREEMENT_THRESHOLD = 0.4     # sebelumnya 0.6 (min 3 dari 5 fold -> min 2 dari 5)
+OOD_CONFIDENCE_THRESHOLD = 0.35
+OOD_MARGIN_THRESHOLD = 0.12
+OOD_AGREEMENT_THRESHOLD = 0.6
