@@ -20,7 +20,8 @@ from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
 from utils.constants import (
     CLASS_NAMES, MODEL_INFO, WEIGHTS_DIR, KATA_SENSITIF,
-    WEBCAM_BUFFER_SECONDS, WEBCAM_APPROX_FPS, MIN_HAND_DETECTION_RATIO,
+    WEBCAM_BUFFER_SECONDS, WEBCAM_APPROX_FPS,
+    MIN_HAND_DETECTION_RATIO,
 )
 from utils.preprocessing import (
     preprocess_frames, raw_seq_to_model_input,
@@ -56,6 +57,7 @@ def get_ice_servers():
     
     return ice_servers
 
+
 st.set_page_config(
     page_title="Kamus SIBI - Prediksi Isyarat",
     page_icon="🖐️",
@@ -86,11 +88,6 @@ def render_badge_card(badge_label, confidence=None, extra_caption=""):
 
 def render_diagnostics_caption(diagnostics):
     n_agree = int(round(diagnostics["agreement"] * diagnostics["n_models"]))
-    st.caption(
-        f"Diagnostik ensemble — confidence: {diagnostics['confidence']*100:.1f}% · "
-        f"margin top-1/top-2: {diagnostics['margin']*100:.1f}% · "
-        f"kesepakatan fold: {n_agree}/{diagnostics['n_models']}"
-    )
 
 
 def render_topk_list(results):
@@ -100,12 +97,6 @@ def render_topk_list(results):
         st.progress(min(prob, 1.0), text=f"{prob*100:.1f}%")
 
 
-def maybe_show_sensitive_note(label):
-    if label in KATA_SENSITIF:
-        st.info(
-            "ℹ️ Kosakata ini termasuk istilah kesehatan reproduksi yang "
-            "digunakan untuk konteks edukasi kesehatan bagi komunitas Tuli."
-        )
 
 # ════════════════════════════════════════════════════════════════
 # SIDEBAR NAVIGASI
@@ -198,8 +189,6 @@ elif page == "Prediksi":
         )
         st.stop()
 
-    st.caption(f"Model dimuat dari {len(all_weight_files)} file bobot di `{WEIGHTS_DIR}` (semua di-ensemble).")
-
     combined_model = load_combined_ensemble_model(tuple(all_weight_files))
 
     st.session_state.setdefault("input_mode", "📁 Upload Video")
@@ -271,8 +260,7 @@ elif page == "Prediksi":
 
                             render_topk_list(results)
 
-                            if is_ok:
-                                maybe_show_sensitive_note(results[0][0])
+
 
     # ── MODE: WEBCAM ─────────────────────────────────────────────
     elif input_mode == "📷 Webcam":
@@ -339,7 +327,10 @@ elif page == "Prediksi":
         if was_playing and not now_playing:
             proc = st.session_state.cam_processor_ref
             if proc is None:
-                st.session_state.webcam_result = {"status": "not_detected", "n_frames": 0, "detection_ratio": 0.0, "annotated": None}
+                st.session_state.webcam_result = {
+                    "status": "not_detected", "n_frames": 0,
+                    "detection_ratio": 0.0, "annotated": None,
+                }
             else:
                 with proc.lock:
                     raw_seq = np.array(list(proc.feature_buffer), dtype=np.float32)
@@ -414,9 +405,6 @@ elif page == "Prediksi":
 
                 render_topk_list(results)
 
-                if is_ok:
-                    maybe_show_sensitive_note(results[0][0])
-
         st.caption(
             "Catatan: koneksi webcam menggunakan WebRTC dan server STUN publik. "
             "Pada beberapa jaringan kantor/kampus dengan firewall ketat, koneksi kamera "
@@ -443,13 +431,12 @@ elif page == "Tentang Model":
         <li><b>Optimizer</b>: Adam dengan Cosine Annealing Warm Restarts (T₀=10).</li>
         <li><b>Dropout</b>: 0.4 (lebih tinggi dari varian tanpa augmentasi, untuk
             mengimbangi kapasitas ekstra dari data yang diperbanyak augmentasi).</li>
-        <li><b>Augmentasi data</b>: <i>geometry-consistent augmentation</i> — scaling,
+        <li><b>Augmentasi data</b>: Geometry-consistent augmentation — scaling,
             shift, noise, dan frame-dropout diterapkan pada 126 dim koordinat XYZ
-            mentah, lalu ke-38 fitur geometri tangan DIHITUNG ULANG dari koordinat
+            mentah, lalu ke-38 fitur geometri tangan dihitung ulang dari koordinat
             yang sudah diaugmentasi (bukan sekadar disalin), supaya fitur geometri
             tetap konsisten secara geometris dengan bentuk tangan hasil augmentasi.</li>
-        <li><b>Validasi</b>: 5-fold cross-validation subject-independent,
-            3 seed acak per fold (15 run total).</li>
+        <li><b>Validasi</b>: 5-fold cross-validation subject-independent.</li>
         </ul>
         </div>
     """, unsafe_allow_html=True)
@@ -458,7 +445,11 @@ elif page == "Tentang Model":
     col1, col2, col3 = st.columns(3)
     col1.metric("Akurasi", f"{MODEL_INFO['avg_accuracy']*100:.2f}%")
     col2.metric("F1-Score Macro", f"{MODEL_INFO['avg_f1']*100:.2f}%")
-    col3.metric("Std. Akurasi", f"±{MODEL_INFO['std_accuracy']*100:.2f}%")
+    col3.metric("Loss Gap", f"{MODEL_INFO['loss_gap']:.4f}")
+    st.caption(
+        "Loss Gap = selisih loss validasi dan loss training terendah — indikator "
+        "overfitting (makin kecil, makin kecil kesenjangan antara data latih dan data uji)."
+    )
 
     section_header("Pipeline Ekstraksi Fitur")
     st.markdown("""
